@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.local
+*.log
+npm-debug.log*
+coverage/
+.DS_Store
+prisma/*.db
+prisma/*.db-journal
+prisma/dev.db*
+prisma/migrations/dev.db*

@@ -1,0 +1,357 @@
+// Prisma schema for the E-Commerce backend.
+// Models map directly to the screens/flows in the project flowchart:
+// auth/account, catalog (categories/products/reviews), cart, wishlist,
+// coupons, orders + tracking, payments (Stripe), and returns/refunds.
+//
+// Database provider: SQLite (zero-setup "mock" mode — runs instantly with no
+// external database). SQLite does not support Prisma enums, so status/role/etc.
+// columns are plain strings; the allowed values live in src/types/enums.ts and
+// are enforced by Zod validation at the API boundary.
+//
+// To switch to PostgreSQL: set provider = "postgresql" and point DATABASE_URL
+// at your instance (a Postgres-ready docker-compose.yml is included).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String
+  firstName     String
+  lastName      String
+  phone         String?
+  role          String    @default("CUSTOMER")
+  isActive      Boolean   @default(true)
+
+  // Account settings / notification preferences (flowchart screen 11)
+  emailNotifications Boolean @default(true)
+  smsNotifications   Boolean @default(false)
+
+  // Password reset (forgot password flow)
+  resetToken        String?
+  resetTokenExpiry  DateTime?
+
+  // Refresh token (rotated on login/refresh)
+  refreshTokenHash  String?
+
+  addresses     Address[]
+  cart          Cart?
+  wishlist      Wishlist?
+  orders        Order[]
+  reviews       Review[]
+  returns       ReturnRequest[]
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([email])
+}
+
+model Address {
+  id          String      @id @default(uuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type        String      @default("SHIPPING")
+  fullName    String
+  phone       String
+  line1       String
+  line2       String?
+  city        String
+  state       String
+  postalCode  String
+  country     String      @default("US")
+  isDefault   Boolean     @default(false)
+
+  shippingOrders Order[]  @relation("OrderShippingAddress")
+  billingOrders  Order[]  @relation("OrderBillingAddress")
+
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([userId])
+}
+
+model Category {
+  id          String     @id @default(uuid())
+  name        String     @unique
+  slug        String     @unique
+  description String?
+  imageUrl    String?
+  parentId    String?
+  parent      Category?  @relation("CategoryToCategory", fields: [parentId], references: [id])
+  children    Category[] @relation("CategoryToCategory")
+  products    Product[]
+
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([slug])
+}
+
+model Product {
+  id            String         @id @default(uuid())
+  name          String
+  slug          String         @unique
+  description   String
+  brand         String?
+  sku           String         @unique
+  price         Decimal
+  compareAtPrice Decimal?
+  currency      String         @default("usd")
+  stock         Int            @default(0)
+  isActive      Boolean        @default(true)
+  isFeatured    Boolean        @default(false)
+
+  // Denormalized rating aggregates for fast PLP/PDP rendering
+  ratingAverage Float          @default(0)
+  ratingCount   Int            @default(0)
+
+  categoryId    String
+  category      Category       @relation(fields: [categoryId], references: [id])
+
+  images        ProductImage[]
+  reviews       Review[]
+  cartItems     CartItem[]
+  wishlistItems WishlistItem[]
+  orderItems    OrderItem[]
+
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([slug])
+  @@index([categoryId])
+  @@index([brand])
+  @@index([price])
+}
+
+model ProductImage {
+  id        String  @id @default(uuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String
+  alt       String?
+  position  Int     @default(0)
+
+  @@index([productId])
+}
+
+model Review {
+  id        String   @id @default(uuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rating    Int
+  title     String?
+  comment   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([productId, userId])
+  @@index([productId])
+}
+
+model Cart {
+  id        String     @id @default(uuid())
+  userId    String     @unique
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items     CartItem[]
+
+  couponId  String?
+  coupon    Coupon?    @relation(fields: [couponId], references: [id])
+
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+model CartItem {
+  id        String   @id @default(uuid())
+  cartId    String
+  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  quantity  Int      @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([cartId, productId])
+  @@index([cartId])
+}
+
+model Wishlist {
+  id        String         @id @default(uuid())
+  userId    String         @unique
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items     WishlistItem[]
+
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+}
+
+model WishlistItem {
+  id         String   @id @default(uuid())
+  wishlistId String
+  wishlist   Wishlist @relation(fields: [wishlistId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  createdAt  DateTime @default(now())
+
+  @@unique([wishlistId, productId])
+  @@index([wishlistId])
+}
+
+model Coupon {
+  id            String       @id @default(uuid())
+  code          String       @unique
+  description   String?
+  discountType  String       @default("PERCENTAGE")
+  discountValue Decimal
+  minOrderValue Decimal?
+  maxDiscount   Decimal?
+  usageLimit    Int?
+  usedCount     Int          @default(0)
+  isActive      Boolean      @default(true)
+  startsAt      DateTime?
+  expiresAt     DateTime?
+
+  carts         Cart[]
+  orders        Order[]
+
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([code])
+}
+
+model Order {
+  id            String        @id @default(uuid())
+  orderNumber   String        @unique
+  userId        String
+  user          User          @relation(fields: [userId], references: [id])
+
+  status        String        @default("PENDING")
+
+  // Money snapshot at time of purchase
+  subtotal      Decimal
+  discountTotal Decimal       @default(0)
+  shippingTotal Decimal       @default(0)
+  taxTotal      Decimal       @default(0)
+  grandTotal    Decimal
+  currency      String        @default("usd")
+
+  couponId      String?
+  coupon        Coupon?       @relation(fields: [couponId], references: [id])
+
+  shippingAddressId String?
+  shippingAddress   Address?  @relation("OrderShippingAddress", fields: [shippingAddressId], references: [id])
+  billingAddressId  String?
+  billingAddress    Address?  @relation("OrderBillingAddress", fields: [billingAddressId], references: [id])
+
+  items         OrderItem[]
+  payment       Payment?
+  tracking      OrderTrackingEvent[]
+  returns       ReturnRequest[]
+
+  placedAt      DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([userId])
+  @@index([orderNumber])
+}
+
+model OrderItem {
+  id          String   @id @default(uuid())
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id])
+
+  // Snapshot of product details at purchase time
+  productName String
+  sku         String
+  unitPrice   Decimal
+  quantity    Int
+  lineTotal   Decimal
+
+  returnItems ReturnItem[]
+
+  @@index([orderId])
+}
+
+model OrderTrackingEvent {
+  id          String      @id @default(uuid())
+  orderId     String
+  order       Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status      String
+  message     String
+  location    String?
+  createdAt   DateTime    @default(now())
+
+  @@index([orderId])
+}
+
+model Payment {
+  id                    String        @id @default(uuid())
+  orderId               String        @unique
+  order                 Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  method                String        @default("CARD")
+  status                String        @default("PENDING")
+  amount                Decimal
+  currency              String        @default("usd")
+
+  // Stripe references
+  stripePaymentIntentId String?       @unique
+  stripeClientSecret    String?
+  stripeChargeId        String?
+  refundedAmount        Decimal       @default(0)
+
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  @@index([orderId])
+}
+
+model ReturnRequest {
+  id          String       @id @default(uuid())
+  orderId     String
+  order       Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  status      String       @default("REQUESTED")
+  reason      String
+  comment     String?
+  refundAmount Decimal?
+
+  items       ReturnItem[]
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([orderId])
+  @@index([userId])
+}
+
+model ReturnItem {
+  id              String        @id @default(uuid())
+  returnRequestId String
+  returnRequest   ReturnRequest @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  orderItemId     String
+  orderItem       OrderItem     @relation(fields: [orderItemId], references: [id])
+  quantity        Int
+
+  @@index([returnRequestId])
+}
